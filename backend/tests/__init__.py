@@ -1,0 +1,3 @@
+"""Tests initialization"""
+
+import pytest
