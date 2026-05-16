@@ -1,66 +1,176 @@
 version: '3.8'
 
 services:
-  # FastAPI Backend
-  backend:
+  # NexusMCP Gateway - Phase 1 Foundation
+  gateway:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    container_name: nexusmcp-gateway
     ports:
       - "8000:8000"
     environment:
-      - ENVIRONMENT=development
-      - DEBUG=true
-      - REDIS_HOST=redis
-      - DATABASE_URL=postgresql://user:password@postgres:5432/nelusus
+      # Application
+      ENVIRONMENT: development
+      DEBUG: "true"
+      SERVICE_NAME: nexusmcp-gateway
+      SERVICE_VERSION: "1.0.0"
+
+      # JWT/RS256 Auth (configure with your IdP)
+      JWT_ALGORITHM: RS256
+      JWKS_URI: "https://your-idp.com/.well-known/jwks.json"
+      JWKS_CACHE_TTL_SECONDS: "3600"
+      JWT_ISSUER: "https://your-idp.com/"
+      JWT_AUDIENCE: "nexusmcp"
+      JWT_LEEWAY_SECONDS: "30"
+
+      # OAuth2 Configuration
+      OAUTH2_CLIENT_ID: "your-client-id"
+      OAUTH2_CLIENT_SECRET: "your-client-secret"
+      OAUTH2_PROVIDER_URL: "https://your-idp.com"
+      OAUTH2_TOKEN_ENDPOINT: "https://your-idp.com/oauth/token"
+      OAUTH2_AUTHORIZE_ENDPOINT: "https://your-idp.com/oauth/authorize"
+      OAUTH2_JWKS_ENDPOINT: "https://your-idp.com/.well-known/jwks.json"
+
+      # Redis Cache
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      REDIS_MAX_CONNECTIONS: "50"
+      REDIS_TIMEOUT_SECONDS: "5"
+
+      # Redis TTLs
+      REDIS_JWKS_TTL: "3600"
+      REDIS_TOKEN_TTL: "1800"
+      REDIS_TOOL_SCHEMA_TTL: "7200"
+      REDIS_RLS_POLICY_TTL: "3600"
+
+      # DynamoDB (for Phase 2+)
+      DYNAMODB_REGION: "us-east-1"
+      DYNAMODB_ENDPOINT_URL: "http://localstack:4566"
+      DYNAMODB_TABLE_TOOLS: "nexusmcp-tools"
+      DYNAMODB_TABLE_RLS_POLICIES: "nexusmcp-rls-policies"
+
+      # OpenTelemetry Tracing
+      OTEL_ENABLED: "true"
+      OTEL_EXPORTER_TYPE: "otlp"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4317"
+      OTEL_SAMPLER_RATE: "1.0"
+
+      # Logging
+      LOG_LEVEL: DEBUG
+      LOG_FORMAT: json
+
+      # CORS
+      CORS_ENABLED: "true"
+
+      # Database (for future phases)
+      DATABASE_URL: "postgresql://nexusmcp:password@postgres:5432/nexusmcp"
+
     depends_on:
-      - redis
-      - postgres
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
     volumes:
       - ./backend:/app
-    command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-  # Redis Cache
+    networks:
+      - nexusmcp-network
+
+    # Development mode with auto-reload
+    command: >
+      python -m uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+
+  # Redis Cache - Cluster Mode (7.x)
   redis:
     image: redis:7-alpine
+    container_name: nexusmcp-redis
     ports:
       - "6379:6379"
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+
+    volumes:
+      - redis_data:/data
+
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
+      start_period: 10s
 
-  # PostgreSQL Database (for audit logs)
+    networks:
+      - nexusmcp-network
+
+  # PostgreSQL Database (Audit Logs & Future Phases)
   postgres:
     image: postgres:15-alpine
+    container_name: nexusmcp-postgres
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: user
+      POSTGRES_USER: nexusmcp
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: nelusus
+      POSTGRES_DB: nexusmcp
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user"]
+      test: ["CMD-SHELL", "pg_isready -U nexusmcp"]
       interval: 5s
       timeout: 3s
       retries: 5
+      start_period: 10s
 
-  # Next.js Frontend (optional for Phase 1)
-  # frontend:
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: Dockerfile
+    networks:
+      - nexusmcp-network
+
+  # OpenTelemetry Jaeger (Tracing & Observability)
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: nexusmcp-jaeger
+    ports:
+      - "6831:6831/udp"  # Jaeger compact thrift
+      - "6832:6832/udp"  # Jaeger binary thrift
+      - "5778:5778"      # Serve configs
+      - "16686:16686"    # Jaeger UI
+      - "14268:14268"    # Collect span HTTP
+      - "14250:14250"    # Collect span gRPC
+      - "4317:4317"      # OTLP gRPC receiver
+      - "4318:4318"      # OTLP HTTP receiver
+
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+
+    networks:
+      - nexusmcp-network
+
+  # LocalStack (AWS services for local development - optional)
+  # Uncomment to use DynamoDB locally
+  # localstack:
+  #   image: localstack/localstack:latest
+  #   container_name: nexusmcp-localstack
   #   ports:
-  #     - "3000:3000"
-  #   depends_on:
-  #     - backend
+  #     - "4566:4566"
   #   environment:
-  #     NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
-  #   volumes:
-  #     - ./frontend:/app
+  #     SERVICES: dynamodb
+  #   networks:
+  #     - nexusmcp-network
 
 volumes:
+  redis_data:
   postgres_data:
+
+networks:
+  nexusmcp-network:
+    driver: bridge

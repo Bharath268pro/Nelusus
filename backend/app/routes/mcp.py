@@ -1,133 +1,165 @@
-"""MCP tool execution routes"""
+"""JSON-RPC 2.0 MCP gateway routes"""
 
 import logging
-from fastapi import APIRouter, Request, HTTPException, status, Depends
-from app.models.mcp_protocol import MCPRequest, MCPResponse
-from app.services.oauth import OAuthService
-from app.services.rls import RowLevelSecurityService
-from app.services.salesforce import SalesforceService
-from app.services import AuthenticationService
-import time
+from typing import Optional, Dict, Any
+from fastapi import APIRouter, Request, HTTPException, Depends, Response
+from fastapi.responses import StreamingResponse
+import json
+from app.config import Settings, get_settings
+from app.models.jsonrpc import (
+    JSONRPCRequest,
+    Identity,
+    ToolCallRequest,
+    ToolListRequest,
+)
+from app.services.jsonrpc_handler import (
+    JSONRPCHandler,
+    ToolCallHandler,
+    ToolListHandler,
+)
+from app.models.error_codes import create_jsonrpc_error, ErrorCode
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/mcp", tags=["mcp"])
+router = APIRouter(prefix="/api/v1", tags=["mcp"])
 
-# Service instances
-oauth_service = OAuthService()
-rls_service = RowLevelSecurityService()
-salesforce_service = SalesforceService()
+# Initialize handlers
+jsonrpc_handler = JSONRPCHandler()
+tool_call_handler = ToolCallHandler(jsonrpc_handler)
+tool_list_handler = ToolListHandler(jsonrpc_handler)
 
 
-@router.post("/tool-call", response_model=MCPResponse)
-async def execute_tool(request: Request, mcp_request: MCPRequest):
+@router.post("/rpc")
+async def handle_jsonrpc(
+    request: Request, settings: Settings = Depends(get_settings)
+):
     """
-    Execute an MCP tool call with full security validation.
-
-    Security pipeline:
-    1. Validate JWT token
-    2. Check OAuth scopes
-    3. Validate row-level security
-    4. Apply PII redaction
-    5. Execute tool
-    6. Cache result
+    Main JSON-RPC 2.0 endpoint
+    
+    Accepts:
+    - Single JSON-RPC request
+    - Batch of JSON-RPC requests (array)
+    - Tools/call and tools/list methods
     """
-    start_time = time.time()
-    request_id = mcp_request.tool_call.request_id
-
     try:
-        # Step 1: Validate JWT
-        jwt_token = AuthenticationService.decode_token(mcp_request.auth_token)
-        if not jwt_token:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired token",
+        # Get identity from middleware
+        identity: Optional[Identity] = getattr(request.state, "identity", None)
+
+        # Read request body
+        body = await request.body()
+        if not body:
+            error = create_jsonrpc_error(
+                ErrorCode.INVALID_REQUEST,
+                data={"reason": "Empty request body"},
             )
+            return error.model_dump()
 
-        user_id = jwt_token.sub
+        # Try to parse as single request or batch
+        is_batch = False
+        requests = jsonrpc_handler.parse_batch_request(body)
 
-        # Step 2: Check tool availability and scopes
-        tool_name = mcp_request.tool_call.tool_name
-        logger.info(f"User {user_id} requesting tool: {tool_name}")
-
-        # Example: Read Salesforce Account
-        if tool_name == "read_salesforce_account":
-            # Get scope
-            authorized, missing_scope = await oauth_service.validate_scopes(
-                user_id, ["sfdc:read_account"]
-            )
-            if not authorized:
-                logger.warning(
-                    f"User {user_id} lacks scope {missing_scope} for {tool_name}"
+        if not requests:
+            # Try single request
+            parsed_request = jsonrpc_handler.parse_request(body)
+            if not parsed_request:
+                error = create_jsonrpc_error(
+                    ErrorCode.PARSE_ERROR,
+                    data={"reason": "Invalid JSON-RPC format"},
                 )
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Missing required scope: {missing_scope}",
-                )
-
-            # Step 3: Get user context for RLS
-            user_context = await oauth_service.get_user_context(user_id)
-            if not user_context:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Could not retrieve user context",
-                )
-
-            # Get account ID from arguments
-            account_id = mcp_request.tool_call.arguments.get("account_id")
-            if not account_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Missing required argument: account_id",
-                )
-
-            # Step 3: Validate RLS
-            rls_result = rls_service.check_row_access(user_context, "Account", account_id)
-            if not rls_result.authorized:
-                logger.warning(
-                    f"User {user_id} denied access to Account {account_id}: {rls_result.reason}"
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Not authorized to access this record",
-                )
-
-            # Step 4: Fetch from Salesforce
-            account_data = await salesforce_service.get_account(account_id)
-            if not account_data:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Account {account_id} not found",
-                )
-
-            # Step 5: Apply PII redaction
-            redacted_data = rls_service.redact_record(account_data, rls_result.redaction_rules)
-
-            execution_time = (time.time() - start_time) * 1000  # Convert to ms
-
-            return MCPResponse(
-                request_id=request_id,
-                status="success",
-                data=redacted_data,
-                redaction_applied=len(rls_result.redaction_rules) > 0,
-                cache_hit=False,
-                execution_time_ms=execution_time,
-            )
-
+                return error.model_dump()
+            requests = [parsed_request]
         else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unknown tool: {tool_name}",
-            )
+            is_batch = True
+            if len(requests) > settings.jsonrpc_batch_request_max_size:
+                error = create_jsonrpc_error(
+                    ErrorCode.INVALID_REQUEST,
+                    data={
+                        "reason": f"Batch size exceeds limit of {settings.jsonrpc_batch_request_max_size}"
+                    },
+                )
+                return error.model_dump()
 
-    except HTTPException:
-        raise
+        # Process requests
+        responses = []
+        for req in requests:
+            response = await _process_single_request(
+                req, identity, settings, getattr(request.state, "rls_context", None)
+            )
+            # Only include response if not a notification (no id)
+            if response is not None and req.id is not None:
+                responses.append(response)
+
+        # Return response(s)
+        if is_batch:
+            return [r.model_dump() for r in responses]
+        elif responses:
+            return responses[0].model_dump()
+        else:
+            # All requests were notifications
+            return {}
+
     except Exception as e:
-        logger.error(f"Tool execution error for request {request_id}: {e}")
-        execution_time = (time.time() - start_time) * 1000
-        return MCPResponse(
-            request_id=request_id,
-            status="error",
-            error=str(e),
-            execution_time_ms=execution_time,
+        logger.error(f"RPC handler error: {e}")
+        error = create_jsonrpc_error(
+            ErrorCode.INTERNAL_ERROR,
+            data={"reason": "Internal server error"},
         )
+        return error.model_dump()
+
+
+async def _process_single_request(
+    request: JSONRPCRequest,
+    identity: Optional[Identity],
+    settings: Settings,
+    rls_context: Optional[Dict] = None,
+) -> Optional[Dict[str, Any]]:
+    """Process a single JSON-RPC request"""
+
+    # Validate JSON-RPC structure
+    if request.jsonrpc != "2.0":
+        error = create_jsonrpc_error(
+            ErrorCode.INVALID_REQUEST,
+            request.id,
+            {"reason": "Invalid jsonrpc version"},
+        )
+        return error
+
+    # Route to appropriate handler
+    if request.method == "tools/call":
+        try:
+            tool_call_req = ToolCallRequest(**request.model_dump())
+            response = await tool_call_handler.handle_tool_call(
+                tool_call_req, identity, rls_context
+            )
+            return response.model_dump()
+        except Exception as e:
+            logger.error(f"Error processing tools/call: {e}")
+            error = create_jsonrpc_error(
+                ErrorCode.INVALID_PARAMS,
+                request.id,
+                {"reason": f"Invalid parameters: {str(e)}"},
+            )
+            return error.model_dump()
+
+    elif request.method == "tools/list":
+        try:
+            tool_list_req = ToolListRequest(**request.model_dump())
+            response = await tool_list_handler.handle_tool_list(tool_list_req, identity)
+            return response.model_dump()
+        except Exception as e:
+            logger.error(f"Error processing tools/list: {e}")
+            error = create_jsonrpc_error(
+                ErrorCode.INVALID_PARAMS,
+                request.id,
+                {"reason": f"Invalid parameters: {str(e)}"},
+            )
+            return error.model_dump()
+
+    else:
+        # Method not found
+        error = create_jsonrpc_error(
+            ErrorCode.METHOD_NOT_FOUND,
+            request.id,
+            {"method": request.method},
+        )
+        return error.model_dump()
