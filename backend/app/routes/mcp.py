@@ -9,6 +9,9 @@ from app.services.salesforce import SalesforceService
 from app.services import AuthenticationService
 import time
 
+from app.models.mcp_registry import ToolCallRequest, ToolCallResponse, ToolDefinition
+from app.services.registry_engine import registry, ToolRegistryEngine
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/mcp", tags=["mcp"])
@@ -131,3 +134,31 @@ async def execute_tool(request: Request, mcp_request: MCPRequest):
             error=str(e),
             execution_time_ms=execution_time,
         )
+
+from app.dependencies.auth import get_current_user_jwt, require_scope
+from app.models.security import JWTToken
+
+# --- Phase 1: Tool Registry Endpoints ---
+
+def get_registry() -> ToolRegistryEngine:
+    return registry
+
+@router.get("/tools", response_model=list[ToolDefinition])
+async def discover_tools(
+    reg: ToolRegistryEngine = Depends(get_registry),
+    jwt_token: JWTToken = Depends(get_current_user_jwt)
+):
+    """LLM calls this to figure out what it can do."""
+    return reg.list_tools()
+
+@router.post("/execute", response_model=ToolCallResponse)
+async def execute_dynamic_tool(
+    request: ToolCallRequest, 
+    reg: ToolRegistryEngine = Depends(get_registry),
+    jwt_token: JWTToken = Depends(require_scope("mcp:execute"))
+):
+    """LLM (via Orchestrator) posts here to trigger action."""
+    # We can pass jwt_token as user_context so the connector knows who called it
+    return await reg.execute_tool(request, user_context=jwt_token)
+
+

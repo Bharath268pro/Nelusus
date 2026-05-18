@@ -29,6 +29,7 @@ class AuthenticationService:
                 token,
                 settings.jwt_secret_key,
                 algorithms=[settings.jwt_algorithm],
+                audience="mcp-agents"
             )
             return JWTToken(**payload)
         except jwt.ExpiredSignatureError:
