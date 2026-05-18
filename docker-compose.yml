@@ -13,12 +13,24 @@ services:
       - DEBUG=true
       - REDIS_HOST=redis
       - DATABASE_URL=postgresql://user:password@postgres:5432/nelusus
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc_dir
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-mock}
+      - SALESFORCE_CLIENT_ID=${SALESFORCE_CLIENT_ID:-mock_client}
+      - SALESFORCE_CLIENT_SECRET=${SALESFORCE_CLIENT_SECRET:-mock_secret}
+      - SALESFORCE_INSTANCE_URL=${SALESFORCE_INSTANCE_URL:-https://test.salesforce.com}
+      - SHOPIFY_SHOP_DOMAIN=${SHOPIFY_SHOP_DOMAIN:-mock.myshopify.com}
+      - SHOPIFY_ACCESS_TOKEN=${SHOPIFY_ACCESS_TOKEN:-mock_token}
     depends_on:
       - redis
       - postgres
+      - jaeger
     volumes:
       - ./backend:/app
-    command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      - prometheus_data:/tmp/prometheus_multiproc_dir
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: >
+      sh -c "mkdir -p /tmp/prometheus_multiproc_dir && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
   # Redis Cache
   redis:
@@ -43,24 +55,39 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user"]
+      test: ["CMD-SHELL", "pg_isready -U user -d nelusus"]
       interval: 5s
       timeout: 3s
       retries: 5
 
-  # Next.js Frontend (optional for Phase 1)
-  # frontend:
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: Dockerfile
-  #   ports:
-  #     - "3000:3000"
-  #   depends_on:
-  #     - backend
-  #   environment:
-  #     NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
-  #   volumes:
-  #     - ./frontend:/app
+  # Jaeger for Distributed Tracing
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686" # Web UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
+  # Prometheus for Metrics
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+  # Grafana for Dashboards
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
 
 volumes:
   postgres_data:
+  prometheus_data:
