@@ -2,11 +2,11 @@
 
 > Secure Gateway for MCP Agents accessing Salesforce
 
-## 🔐 Phase 1: Foundation & Security Proxy
+##  Phase 1: Foundation & Security Proxy
 
 This is the foundational phase of the MCP Security Proxy project. The goal is to establish a "Secure Handshake" between MCP agents and tools (Salesforce) with comprehensive security controls.
 
-### 🎯 Phase 1 Objectives
+### Phase 1 Objectives
 
 1. **Authentication** - Validate JWT tokens from agents
 2. **Authorization** - Enforce OAuth scopes for tool access
@@ -14,16 +14,16 @@ This is the foundational phase of the MCP Security Proxy project. The goal is to
 4. **Data Redaction** - Mask PII before returning data to agents
 5. **Performance** - Maintain < 50ms proxy overhead via Redis caching
 
-### 📋 Project Status
+### Project Status
 
 | Week | Goal | Status |
 |------|------|--------|
-| 1 | Architecture & Schema Definition | ✅ Complete |
-| 2 | FastAPI Backend Scaffolding | 🔄 In Progress |
-| 3 | Next.js Frontend Setup | ⏳ Not Started |
-| 4 | Salesforce Integration & "Hello World" | ⏳ Not Started |
+| 1 | Architecture & Schema Definition |  Complete |
+| 2 | FastAPI Backend Scaffolding |  In Progress |
+| 3 | Next.js Frontend Setup |  Not Started |
+| 4 | Salesforce Integration & "Hello World" |  Not Started |
 
-## 🏗️ Architecture
+##  Architecture
 
 ```
 Agent → Security Proxy → Salesforce API
@@ -38,7 +38,7 @@ Agent → Security Proxy → Salesforce API
 
 See `docs/ARCHITECTURE.md` for detailed system design.
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Prerequisites
 - Python 3.10+
@@ -78,7 +78,7 @@ This starts:
 
 See `SETUP.md` for detailed setup instructions.
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 Nelusus/
@@ -104,7 +104,7 @@ Nelusus/
 └── docker-compose.yml       # Local dev environment
 ```
 
-## 🔑 Key Services
+##  Key Services
 
 ### AuthenticationService
 Validates JWT tokens from the request header.
@@ -145,7 +145,7 @@ redacted_data = rls_service.redact_record(
 )
 ```
 
-## 📊 API Endpoints
+##  API Endpoints
 
 ### Health Check
 ```
@@ -180,7 +180,7 @@ Response:
 }
 ```
 
-## ⚙️ Configuration
+##  Configuration
 
 Environment variables in `.env`:
 
@@ -210,7 +210,7 @@ LOG_LEVEL=INFO
 LOG_FORMAT=json
 ```
 
-## 🧪 Testing
+##  Testing
 
 Run the test suite:
 
@@ -221,14 +221,14 @@ pytest --cov          # With coverage report
 pytest tests/test_auth.py  # Specific test file
 ```
 
-## 📈 Performance Goals
+##  Performance Goals
 
 - **JWT Validation**: < 1ms
 - **OAuth Scope Check**: < 50ms (with Redis caching)
 - **RLS Evaluation**: < 20ms
 - **Total Proxy Overhead**: < 50ms
 
-## 🔒 Security Highlights
+##  Security Highlights
 
 ✅ **Authentication**: JWT-based with HS256 signatures
 ✅ **Authorization**: OAuth 2.0 scopes with Redis caching
@@ -238,30 +238,30 @@ pytest tests/test_auth.py  # Specific test file
 ✅ **Rate Limiting**: Prevents abuse (Phase 2)
 ✅ **Encryption**: TLS for all API communication (Phase 2)
 
-## 📚 Documentation
+##  Documentation
 
 - `ARCHITECTURE.md` - Detailed system design
 - `SETUP.md` - Development environment setup
 - `PROGRESS.md` - Phase tracking and milestones
 - API docs (Swagger): http://localhost:8000/docs (when running)
 
-## 🤝 Contributing
+##  Contributing
 
 Team members working on Phase 1:
 - Principal Architect - Security design & decision-making
 - Backend Engineer - Implementation & testing
 - DevOps - Infrastructure & deployment
 
-## 📅 Timeline
+##  Timeline
 
-- **Week 1** ✅ Architecture & schema definition
-- **Week 2** 🔄 Backend scaffolding & Redis integration
-- **Week 3** ⏳ Frontend setup with Auth0/Okta
-- **Week 4** ⏳ Salesforce integration & "Hello World" sync
+- **Week 1**  Architecture & schema definition
+- **Week 2**  Backend scaffolding & Redis integration
+- **Week 3**  Frontend setup with Auth0/Okta
+- **Week 4**  Salesforce integration & "Hello World" sync
 
 **Launch Target**: End of May 2026
 
-## ❓ FAQ
+##  FAQ
 
 **Q: What about database persistence?**
 A: Phase 2 will add PostgreSQL for audit logs and user metadata.
@@ -272,7 +272,7 @@ A: The architecture is tool-agnostic. Phase 2+ will add support for other APIs.
 **Q: How do we handle Salesforce rate limits?**
 A: Token caching reduces API calls. Phase 2 will add request queuing.
 
-## 📞 Support
+##  Support
 
 For questions or issues:
 1. Check the `SETUP.md` and `ARCHITECTURE.md` documentation
